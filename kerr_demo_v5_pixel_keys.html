@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>KERR – Pixel Demo (Play)</title>
+<style>
+  :root{
+    --ui: #00ffff;
+    --ui2:#ff00ff;
+    --warn:#ff3355;
+    --ok:#33ff66;
+    --bg:#000;
+  }
+  html, body { margin:0; padding:0; background:var(--bg); height:100%; overflow:hidden; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; color:var(--ui); }
+  #wrap{ position:fixed; inset:0; background:#000; }
+  canvas{ position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
+  .hud{
+    position:absolute; left:12px; top:10px; z-index:3;
+    font-size:14px; line-height:1.25;
+    text-shadow: 0 0 10px rgba(0,255,255,.35);
+    user-select:none;
+  }
+  #hudRight{
+    position:absolute; right:12px; top:10px; z-index:3;
+    text-align:right; font-size:14px; line-height:1.25;
+    text-shadow: 0 0 10px rgba(0,255,255,.35);
+    user-select:none;
+  }
+  #msg{
+    position:absolute; left:0; right:0; bottom:90px; z-index:3;
+    text-align:center; font-size:16px; color:#fff;
+    text-shadow: 0 0 12px rgba(255,255,255,.3);
+    user-select:none;
+    padding:0 16px;
+    white-space:pre-line;
+  }
+  .btn{
+    position:absolute; bottom:16px; z-index:5;
+    font-size:16px;
+    padding:12px 14px;
+    border:2px solid rgba(0,255,255,.8);
+    background:rgba(0,0,0,.65);
+    color:var(--ui);
+    border-radius:12px;
+    touch-action:manipulation;
+    user-select:none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active{ transform: translateY(1px); }
+  #btnPunch{ right:120px; }
+  #btnAction{ right:16px; }
+  #btnPlay{ left:50%; top:55%; transform:translate(-50%,-50%); bottom:auto; right:auto; padding:14px 22px; font-size:18px;}
+  #btnRetry{ left:50%; top:62%; transform:translate(-50%,-50%); bottom:auto; right:auto; padding:14px 22px; font-size:18px; display:none;}
+  #title{
+    position:absolute; left:50%; top:38%; transform:translate(-50%,-50%);
+    font-size:34px; letter-spacing:2px; color:var(--ui2);
+    text-shadow: 0 0 18px rgba(255,0,255,.45);
+    user-select:none;
+  }
+  #subtitle{
+    position:absolute; left:50%; top:46%; transform:translate(-50%,-50%);
+    font-size:14px; color:#fff; opacity:.85;
+    user-select:none;
+    text-align:center;
+    padding:0 18px;
+    white-space:pre-line;
+  }
+  #overlay{
+    position:absolute; inset:0; z-index:2;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0.0) 0%, rgba(0,0,0,.35) 65%, rgba(0,0,0,.55) 100%);
+    pointer-events:none;
+    opacity:.9;
+  }
+  /* tiny scanlines vibe */
+  #scanlines{
+    position:absolute; inset:0; z-index:4;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.04) 0px,
+      rgba(255,255,255,0.04) 1px,
+      rgba(0,0,0,0) 3px,
+      rgba(0,0,0,0) 6px
+    );
+    mix-blend-mode: overlay;
+    pointer-events:none;
+    opacity:.12;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div id="overlay"></div>
+  <div id="scanlines"></div>
+
+  <div class="hud" id="hudLeft">
+    <div id="hudTime">TIME 60</div>
+    <div id="hudBeer">PROMILLE 0</div>
+    <div id="hudHint">SWIPE ←/→ LIIKU / DASH<br/>ACTION ovilla • PUNCH tappelussa<br/>NÄPPIS: A/D liiku • E ACTION • SPACE PUNCH</div>
+  </div>
+
+  <div id="hudRight">
+    <div id="hudScore">SCORE 0</div>
+    <div id="hudBest">BEST 0</div>
+  </div>
+
+  <div id="msg"></div>
+
+  <button class="btn" id="btnPunch">PUNCH</button>
+  <button class="btn" id="btnAction">ACTION</button>
+
+  <div id="title">KERR</div>
+  <div id="subtitle">Maltan baarikatu • 80-luvun arcade\nSelviä 60 sekuntia. Portsarit ei vitsaile.
+Näppis: A/D • E • SPACE</div>
+  <button class="btn" id="btnPlay">PLAY</button>
+  <button class="btn" id="btnRetry">RETRY</button>
+</div>
+
+<script>
+(() => {
+  // ---------- Pixel renderer setup (offscreen 320x180 scaled up) ----------
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const W0 = 320, H0 = 180;
+  const off = document.createElement('canvas');
+  off.width = W0; off.height = H0;
+  const g = off.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = false;
+
+  function resize(){
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.floor(window.innerWidth * dpr);
+    cv.height = Math.floor(window.innerHeight * dpr);
+    cv.style.width = window.innerWidth + 'px';
+    cv.style.height = window.innerHeight + 'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- UI ----------
+  const uiTime = document.getElementById('hudTime');
+  const uiBeer = document.getElementById('hudBeer');
+  const uiScore = document.getElementById('hudScore');
+  const uiBest = document.getElementById('hudBest');
+  const uiMsg = document.getElementById('msg');
+  const btnPunch = document.getElementById('btnPunch');
+  const btnAction = document.getElementById('btnAction');
+  const btnPlay = document.getElementById('btnPlay');
+  const btnRetry = document.getElementById('btnRetry');
+  const title = document.getElementById('title');
+  const subtitle = document.getElementById('subtitle');
+
+  function setMsg(t){ uiMsg.textContent = t || ""; }
+  function clamp(n,a,b){ return Math.max(a, Math.min(b,n)); }
+
+  // ---------- Game state ----------
+  const WORLD_LEN = 2400;
+  const GROUND_Y = 132; // in offscreen coords
+  const PLAYER_W = 12, PLAYER_H = 20;
+  const BOUNCER_W = 14, BOUNCER_H = 22;
+
+  let state = 'menu'; // menu | play | fight | gameover | win
+  let tLeft = 60.0;
+  let score = 0;
+  let best = 0;
+  let beer = 0;  // 0..110
+  let lastTS = performance.now();
+  let accScoreTick = 0; // for +5/sec
+  let accMetabolism = 0;
+
+  const player = {
+    x: 120,
+    y: GROUND_Y - PLAYER_H,
+    vx: 0,
+    facing: 1,
+    stepTime: 0,
+    dashTime: 0,
+    dashCD: 0,
+    invuln: 0,
+    anim: 0,
+    animT: 0
+  };
+
+  const bouncer = {
+    active:false,
+    x: 0,
+    y: GROUND_Y - BOUNCER_H,
+    vx: 0,
+    dir: -1,
+    warn:false,
+    stun:0
+  };
+
+  const doors = [
+    { type:'bar', x: 420, label:'BAR', cooldown:0 },
+    { type:'strip', x: 860, label:'ILMAINEN', cooldown:0 },
+    { type:'bar', x: 1260, label:'BAR', cooldown:0 },
+    { type:'strip', x: 1650, label:'ILMAINEN', cooldown:0 },
+    { type:'bar', x: 2050, label:'BAR', cooldown:0 },
+  ];
+
+  // fight mini-state
+  const fight = {
+    phase: 0,           // 1 = swipe break free, 2 = punch
+    needDir: 1,         // -1 left, +1 right
+    t: 0,
+    tMax: 0,
+    flash: 0
+  };
+
+  // ---------- Persistence ----------
+  try{
+    best = parseInt(localStorage.getItem('kerr_best') || '0', 10) || 0;
+  }catch(e){ best = 0; }
+  uiBest.textContent = "BEST " + best;
+
+  // ---------- Spawning ----------
+  let nextBouncerIn = 4.0;
+  function scheduleBouncer(){
+    // cruel but fair: random 6..10 sec
+    nextBouncerIn = 6 + Math.random()*4;
+  }
+
+  function spawnBouncer(){
+    bouncer.active = true;
+    bouncer.stun = 0;
+    bouncer.warn = false;
+    const fromRight = Math.random() < 0.5;
+    bouncer.dir = fromRight ? -1 : 1;
+    // spawn just off camera
+    const camX = getCamX();
+    const spawnX = fromRight ? (camX + W0 + 30) : (camX - 30);
+    bouncer.x = clamp(spawnX, 0, WORLD_LEN - BOUNCER_W);
+    bouncer.vx = 0;
+    setMsg("PORTSARI!");
+  }
+
+  // ---------- Input (swipe + buttons) ----------
+  let swipeStart = null;
+
+  function pointerDown(ev){
+    if(state === 'menu') return;
+    // ignore if tapping buttons
+    if(ev.target && (ev.target.id === 'btnPunch' || ev.target.id === 'btnAction' || ev.target.id === 'btnPlay' || ev.target.id === 'btnRetry')) return;
+
+    ev.preventDefault?.();
+    const p = getPoint(ev);
+    swipeStart = { x:p.x, y:p.y, t:performance.now() };
+  }
+  function pointerUp(ev){
+    if(!swipeStart) return;
+    if(state === 'menu') { swipeStart = null; return; }
+
+    ev.preventDefault?.();
+    const p = getPoint(ev);
+    const dx = p.x - swipeStart.x;
+    const dy = p.y - swipeStart.y;
+    const dt = performance.now() - swipeStart.t;
+    swipeStart = null;
+
+    // treat as tap if tiny
+    const absx = Math.abs(dx), absy = Math.abs(dy);
+
+    // In fight: swipes matter even if small
+    if(state === 'fight' && fight.phase === 1){
+      if(absx > absy && absx > 18){
+        const dir = dx < 0 ? -1 : 1;
+        fightSwipe(dir);
+      } else {
+        // tiny swipe = fail in this cruel world
+      }
+      return;
+    }
+
+    // In play: horizontal swipes move/dash
+    if(state === 'play'){
+      if(absx > absy && absx > 22){
+        const dir = dx < 0 ? -1 : 1;
+        const fast = (dt < 180) || (absx > 120);
+        if(fast) dash(dir);
+        else step(dir);
+      } else if(absx < 10 && absy < 10){
+        // tap anywhere can also punch in fight phase 2, or do nothing in play
+      }
+    }
+
+    // In fight phase 2: allow tap to punch
+    if(state === 'fight' && fight.phase === 2){
+      if(absx < 12 && absy < 12){
+        doPunch();
+      }
+    }
+  }
+
+  function getPoint(ev){
+    // map screen coords to offscreen coords
+    const rect = cv.getBoundingClientRect();
+    const sx = (ev.clientX ?? (ev.changedTouches ? ev.changedTouches[0].clientX : 0));
+    const sy = (ev.clientY ?? (ev.changedTouches ? ev.changedTouches[0].clientY : 0));
+    // convert to normalized, then to offscreen
+    const nx = (sx - rect.left) / rect.width;
+    const ny = (sy - rect.top) / rect.height;
+    return { x: nx*W0, y: ny*H0 };
+  }
+
+  function bindInput(){
+    // Pointer events (preferred)
+    cv.addEventListener('pointerdown', pointerDown, {passive:false});
+    cv.addEventListener('pointerup', pointerUp, {passive:false});
+
+    // Touch fallback
+    cv.addEventListener('touchstart', (e)=>{ pointerDown(e); }, {passive:false});
+    cv.addEventListener('touchend', (e)=>{ pointerUp(e); }, {passive:false});
+
+    // Desktop keyboard
+    window.addEventListener('keydown', (e)=>{
+      const k = e.key;
+      const kl = (typeof k === 'string') ? k.toLowerCase() : '';
+
+      // Stop page scrolling on desktop
+      if(k === 'ArrowLeft' || k === 'ArrowRight' || k === ' '){
+        e.preventDefault();
+      }
+
+      // MENU: start with Enter / Space
+      if(state === 'menu'){
+        if(k === 'Enter' || k === ' '){ resetAndPlay(); }
+        return;
+      }
+
+      // PLAY: move + action
+      if(state === 'play'){
+        if(k === 'ArrowLeft' || kl === 'a') step(-1);
+        if(k === 'ArrowRight' || kl === 'd') step(1);
+        if(kl === 'e' || k === 'Enter') doAction();
+      }
+
+      // FIGHT phase 1: break free with swipe keys
+      if(state === 'fight' && fight.phase === 1){
+        if(k === 'ArrowLeft' || kl === 'a') fightSwipe(-1);
+        if(k === 'ArrowRight' || kl === 'd') fightSwipe(1);
+      }
+
+      // FIGHT phase 2: punch
+      if(state === 'fight' && fight.phase === 2){
+        if(k === ' ' || kl === 'p' || kl === 'x' || kl === 'k' || k === 'Enter'){ doPunch(); }
+      }
+
+      // GAMEOVER/WIN: retry
+      if(state === 'gameover' || state === 'win'){
+        if(kl === 'r' || k === 'Enter' || k === ' '){ resetAndPlay(); }
+      }
+    });
+  }
+  bindInput();
+
+  // Buttons
+  btnAction.addEventListener('click', () => { doAction(); });
+  btnPunch.addEventListener('click', () => { doPunch(); });
+  btnPlay.addEventListener('click', () => { resetAndPlay(); });
+  btnRetry.addEventListener('click', () => { resetAndPlay(); });
+
+  function step(dir){
+    if(state !== 'play') return;
+    player.facing = dir;
+    // short move burst
+    player.vx = dir * 140;
+    player.stepTime = 0.22;
+  }
+
+  function dash(dir){
+    if(state !== 'play') return;
+    if(player.dashCD > 0) return;
+    player.facing = dir;
+    player.dashTime = 0.18;
+    player.dashCD = 0.25;
+    player.invuln = 0.22;
+    // dash speed mildly worse when drunk
+    const slow = 1.0 - (beer/120)*0.22;
+    player.vx = dir * 520 * slow;
+    setMsg(""); // clear panic text when you actually do something
+  }
+
+  function doAction(){
+    if(state !== 'play') return;
+
+    // Find nearby door
+    const near = doors.find(d => Math.abs((d.x+8) - (player.x+PLAYER_W/2)) < 26 && d.cooldown <= 0);
+    if(!near){
+      setMsg("EI MITÄÄN TÄSSÄ.");
+      return;
+    }
+
+    if(near.type === 'bar'){
+      near.cooldown = 2.0;
+      beer += 25;
+      score += 25;
+      setMsg("OLUT! +25 (promille +" + 25 + ")");
+      blip(240, 0.08);
+      if(beer > 100){
+        endGame("BLACKOUT.");
+      }
+    }
+
+    if(near.type === 'strip'){
+      near.cooldown = 10.0;
+      const r = Math.random();
+      if(r < 0.25){
+        score += 200;
+        setMsg("STRIPPIBAARI: TUURI! +200");
+        blip(520, 0.07);
+      }else if(r < 0.40){
+        setMsg("STRIPPIBAARI: \"TULE HUOMENNA.\"");
+        blip(180, 0.05);
+      }else{
+        endGame("HUIJATTU STRIPPIBAARISSA.");
+      }
+    }
+  }
+
+  function doPunch(){
+    if(state !== 'fight') return;
+    if(fight.phase !== 2) return;
+
+    // must punch within window
+    const ok = (fight.t <= fight.tMax);
+    if(ok){
+      score += 150;
+      fight.flash = 0.25;
+      setMsg("+150 OSUMA!");
+      blip(660, 0.06);
+      // knock bouncer away
+      bouncer.active = false;
+      // exit fight after tiny delay
+      setTimeout(()=>{ if(state==='fight') backToStreet(); }, 180);
+    }else{
+      endGame("MYÖHÄSSÄ.");
+    }
+  }
+
+  function fightSwipe(dir){
+    if(state !== 'fight') return;
+    if(fight.phase !== 1) return;
+
+    const ok = (dir === fight.needDir) && (fight.t <= fight.tMax);
+    if(ok){
+      fight.flash = 0.25;
+      setMsg("HYVÄ! NYT LYÖ!");
+      blip(420, 0.05);
+      fight.phase = 2;
+      fight.t = 0;
+      // punch window (shorter when drunk)
+      fight.tMax = Math.max(0.35, 0.85 - (beer/120)*0.35);
+      // make punch look "armed"
+      btnPunch.style.borderColor = "rgba(51,255,102,.9)";
+      btnPunch.style.color = "#33ff66";
+    }else{
+      endGame("PORTSARI EI TYYKKÄÄ.");
+    }
+  }
+
+  function startFight(){
+    state = 'fight';
+    fight.phase = 1;
+    fight.t = 0;
+    fight.needDir = Math.random() < 0.5 ? -1 : 1;
+    // swipe window (shorter when drunk)
+    fight.tMax = Math.max(0.28, 0.70 - (beer/120)*0.30);
+    fight.flash = 0.25;
+    // UI
+    btnPunch.style.borderColor = "rgba(0,255,255,.8)";
+    btnPunch.style.color = "#00ffff";
+    setMsg("PORTSARI TARTTUI!\nSWIPE " + (fight.needDir<0 ? "←" : "→") + " NYT!");
+    blip(120, 0.08);
+  }
+
+  function backToStreet(){
+    state = 'play';
+    fight.phase = 0;
+    btnPunch.style.borderColor = "rgba(0,255,255,.8)";
+    btnPunch.style.color = "#00ffff";
+    setMsg("");
+    scheduleBouncer();
+  }
+
+  // ---------- Audio (tiny blips) ----------
+  let audioOk = false;
+  let ac = null;
+  function ensureAudio(){
+    if(audioOk) return;
+    try{
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      audioOk = true;
+    }catch(e){ audioOk = false; }
+  }
+  function blip(freq, dur){
+    ensureAudio();
+    if(!audioOk || !ac) return;
+    if(ac.state === 'suspended'){ ac.resume?.(); }
+    const o = ac.createOscillator();
+    const g0 = ac.createGain();
+    o.type = 'square';
+    o.frequency.value = freq;
+    g0.gain.value = 0.001;
+    o.connect(g0);
+    g0.connect(ac.destination);
+    const t = ac.currentTime;
+    g0.gain.setValueAtTime(0.001, t);
+    g0.gain.exponentialRampToValueAtTime(0.18, t+0.01);
+    g0.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    o.start(t);
+    o.stop(t+dur+0.02);
+  }
+
+  // ---------- Camera ----------
+  function getCamX(){
+    // keep player around 35% screen
+    const target = player.x - (W0*0.35);
+    return clamp(target, 0, WORLD_LEN - W0);
+  }
+
+  // ---------- Drawing helpers ----------
+  function pxRect(x,y,w,h,c){
+    g.fillStyle = c; g.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+  }
+
+  function drawPlayer(x,y){
+    // Minimal NES-ish sprite made of rectangles
+    const cBody = '#00ffff';
+    const cShadow = 'rgba(0,255,255,.25)';
+    // shadow
+    pxRect(x+2, GROUND_Y+10, 10, 2, 'rgba(0,0,0,.45)');
+    // legs (two-frame anim)
+    const step = (player.anim%2===0) ? 0 : 1;
+    pxRect(x+4, y+16, 3, 4, cBody);
+    pxRect(x+7, y+16, 3, 4, cBody);
+    if(step){
+      pxRect(x+3, y+16, 2, 4, cBody);
+      pxRect(x+8, y+16, 2, 4, cBody);
+    }
+    // torso
+    pxRect(x+3, y+7, 8, 9, cBody);
+    // head
+    pxRect(x+4, y+1, 6, 6, cBody);
+    // tiny eye hint (direction)
+    const eyeX = player.facing > 0 ? x+8 : x+5;
+    pxRect(eyeX, y+3, 1, 1, '#000');
+    // outline-ish
+    pxRect(x+2, y+7, 1, 9, cShadow);
+  }
+
+  function drawBouncer(x,y,open){
+    const c = open ? '#33ff66' : '#ff3355';
+    const c2 = open ? 'rgba(51,255,102,.25)' : 'rgba(255,51,85,.25)';
+    pxRect(x+2, GROUND_Y+10, 12, 2, 'rgba(0,0,0,.45)');
+    // legs
+    pxRect(x+4, y+18, 3, 4, c);
+    pxRect(x+8, y+18, 3, 4, c);
+    // torso
+    pxRect(x+3, y+7, 10, 11, c);
+    // head
+    pxRect(x+4, y+1, 8, 6, c);
+    // glasses/eye
+    pxRect(x+5, y+3, 6, 1, '#000');
+    pxRect(x+2, y+7, 1, 11, c2);
+  }
+
+  function drawDoor(d){
+    const x = d.x;
+    const y = GROUND_Y - 34;
+    // building
+    pxRect(x-10, y-26, 40, 60, '#111');
+    // door
+    pxRect(x+6, y+10, 12, 24, '#222');
+    // sign
+    const signCol = d.type==='bar' ? '#00ffff' : '#ff00ff';
+    pxRect(x, y, 28, 10, signCol);
+    // small text as pixels
+    pxRect(x+2, y+3, 2,2, '#000');
+    pxRect(x+6, y+3, 2,2, '#000');
+  }
+
+  function drawStreet(camX, wobble){
+    // clear
+    g.fillStyle = '#050505';
+    g.fillRect(0,0,W0,H0);
+
+    // neon sky glow
+    pxRect(0, 0, W0, 40, '#070012');
+    pxRect(0, 32, W0, 1, 'rgba(255,0,255,.25)');
+
+    // background buildings (parallax)
+    const px = Math.floor(camX*0.35);
+    for(let i=-1;i<12;i++){
+      const bx = (i*70 - (px%70));
+      pxRect(bx, 54, 52, 60, '#101010');
+      // windows
+      for(let w=0; w<5; w++){
+        if(((i+w+Math.floor(camX/80))%3)===0){
+          pxRect(bx+6+w*8, 62 + (w%2)*10, 4, 4, 'rgba(0,255,255,.25)');
+        }
+      }
+      // random neon
+      if(((i+Math.floor(camX/100))%4)===0){
+        pxRect(bx+4, 58, 10, 2, 'rgba(255,0,255,.35)');
+      }
+    }
+
+    // street
+    pxRect(0, GROUND_Y+12, W0, 30, '#141414');
+    // curb
+    pxRect(0, GROUND_Y+12, W0, 2, '#202020');
+
+    // dashed lines
+    for(let i=0;i<20;i++){
+      const lx = i*20 - (Math.floor(camX)%20);
+      pxRect(lx, GROUND_Y+24, 10, 1, 'rgba(0,255,255,.18)');
+    }
+
+    // posters / lights
+    for(let i=0;i<8;i++){
+      const lx = i*45 - (Math.floor(camX*0.8)%45);
+      pxRect(lx+12, 108, 6, 10, 'rgba(255,0,255,.12)');
+    }
+  }
+
+  function drawFightScene(){
+    // darker arena
+    g.fillStyle = '#020206';
+    g.fillRect(0,0,W0,H0);
+    pxRect(0, 0, W0, 1, 'rgba(255,0,255,.25)');
+    pxRect(0, H0-1, W0, 1, 'rgba(0,255,255,.25)');
+
+    // ground
+    pxRect(0, GROUND_Y+12, W0, 40, '#0c0c0c');
+
+    // big sprites
+    drawPlayer(70, GROUND_Y-28);
+    const open = (fight.phase===2);
+    drawBouncer(210, GROUND_Y-30, open);
+
+    // arrows / cues
+    if(fight.phase===1){
+      // big arrow
+      const dir = fight.needDir;
+      const ax = dir<0 ? 120 : 170;
+      pxRect(ax, 64, 30, 6, '#fff');
+      if(dir<0){
+        pxRect(ax-8, 61, 8, 12, '#fff');
+      }else{
+        pxRect(ax+30, 61, 8, 12, '#fff');
+      }
+    } else {
+      // punch cue
+      pxRect(140, 62, 40, 10, 'rgba(51,255,102,.35)');
+      pxRect(146, 65, 28, 4, '#33ff66');
+    }
+  }
+
+  // ---------- Update loop ----------
+  function resetAndPlay(){
+    state = 'play';
+    tLeft = 60.0;
+    score = 0;
+    beer = 0;
+    accScoreTick = 0;
+    accMetabolism = 0;
+    player.x = 120; player.vx = 0; player.stepTime = 0; player.dashTime = 0; player.dashCD=0; player.invuln=0; player.facing=1;
+    bouncer.active = false; bouncer.stun=0;
+    doors.forEach(d=> d.cooldown = 0);
+    scheduleBouncer();
+    nextBouncerIn = 2.6; // early pressure
+    setMsg("SWIPE ←/→ LIIKU / DASH");
+    title.style.display = 'none';
+    subtitle.style.display = 'none';
+    btnPlay.style.display = 'none';
+    btnRetry.style.display = 'none';
+    btnPunch.style.display = '';
+    btnAction.style.display = '';
+    blip(360,0.05);
+  }
+
+  function endGame(reason){
+    if(state === 'gameover' || state === 'win') return;
+    state = 'gameover';
+    setMsg(reason + "\nFINAL SCORE " + Math.floor(score) + "\nRETRY");
+    blip(90,0.12);
+    // best
+    if(score > best){
+      best = Math.floor(score);
+      try{ localStorage.setItem('kerr_best', String(best)); }catch(e){}
+    }
+    uiBest.textContent = "BEST " + best;
+
+    btnRetry.style.display = '';
+    title.style.display = '';
+    subtitle.style.display = 'none';
+    btnPlay.style.display = 'none';
+  }
+
+  function win(){
+    state = 'win';
+    setMsg("AAMU KOITTAA!\nFINAL SCORE " + Math.floor(score) + "\nRETRY");
+    blip(820,0.08);
+    if(score > best){
+      best = Math.floor(score);
+      try{ localStorage.setItem('kerr_best', String(best)); }catch(e){}
+    }
+    uiBest.textContent = "BEST " + best;
+    btnRetry.style.display = '';
+    title.style.display = '';
+    subtitle.style.display = 'none';
+    btnPlay.style.display = 'none';
+  }
+
+  // menu visible initially
+  btnPunch.style.display = 'none';
+  btnAction.style.display = 'none';
+  setMsg("");
+
+  function update(dt){
+    if(state === 'menu') return;
+
+    if(state === 'play'){
+      // timers
+      tLeft -= dt;
+      if(tLeft <= 0){ tLeft = 0; win(); return; }
+
+      // survival score +5 / sec
+      accScoreTick += dt;
+      while(accScoreTick >= 1.0){
+        accScoreTick -= 1.0;
+        score += 5;
+        // metabolism 2 per sec
+        beer = Math.max(0, beer - 2);
+      }
+
+      // door cooldowns
+      for(const d of doors){
+        d.cooldown = Math.max(0, d.cooldown - dt);
+      }
+
+      // move
+      if(player.stepTime > 0){
+        player.stepTime -= dt;
+        if(player.stepTime <= 0) player.vx = 0;
+      }
+      if(player.dashTime > 0){
+        player.dashTime -= dt;
+        if(player.dashTime <= 0) player.vx = 0;
+      }
+      player.dashCD = Math.max(0, player.dashCD - dt);
+      player.invuln = Math.max(0, player.invuln - dt);
+
+      // apply velocity
+      player.x += player.vx * dt;
+      player.x = clamp(player.x, 0, WORLD_LEN - PLAYER_W);
+
+      // simple animation
+      player.animT += dt;
+      if(Math.abs(player.vx) > 1 && player.animT > 0.12){
+        player.animT = 0;
+        player.anim++;
+      }
+
+      // bouncer scheduling
+      nextBouncerIn -= dt;
+      if(nextBouncerIn <= 0 && !bouncer.active){
+        spawnBouncer();
+        scheduleBouncer();
+      }
+
+      // bouncer behavior
+      if(bouncer.active){
+        // if stunned, wait then disappear
+        if(bouncer.stun > 0){
+          bouncer.stun -= dt;
+          if(bouncer.stun <= 0){
+            bouncer.active = false;
+          }
+        }else{
+          // chase player
+          const dx = (player.x - bouncer.x);
+          const dir = dx < 0 ? -1 : 1;
+          bouncer.dir = dir;
+
+          // speed scales a bit with your beer (harder when drunk)
+          const base = 92 + (beer/120)*40;
+          bouncer.vx = dir * base;
+
+          // move
+          bouncer.x += bouncer.vx * dt;
+          bouncer.x = clamp(bouncer.x, 0, WORLD_LEN - BOUNCER_W);
+
+          // warning if close
+          const dist = Math.abs((bouncer.x + BOUNCER_W/2) - (player.x + PLAYER_W/2));
+          if(dist < 72 && !bouncer.warn){
+            bouncer.warn = true;
+            setMsg("VÄISTÄ!");
+            blip(160, 0.05);
+          }
+          if(dist >= 90){
+            bouncer.warn = false;
+          }
+
+          // collision -> fight (unless invulnerable)
+          if(dist < 14 && player.invuln <= 0){
+            // grabbed!
+            startFight();
+          }
+
+          // if you dash through him while invulnerable & very close: he gets stunned and you get tiny score
+          if(dist < 14 && player.invuln > 0){
+            score += 20;
+            bouncer.stun = 0.6;
+            setMsg("+20 (väistö)");
+          }
+        }
+      }
+
+      // blackout check
+      if(beer > 100){
+        endGame("BLACKOUT.");
+      }
+    }
+
+    if(state === 'fight'){
+      fight.t += dt;
+      // if time runs out for a phase -> lose
+      if(fight.t > fight.tMax + 0.02){
+        if(fight.phase === 1) endGame("ET VÄISTÄNYT.");
+        if(fight.phase === 2) endGame("ET LYÖNYT.");
+      }
+      // tiny pulse
+      fight.flash = Math.max(0, fight.flash - dt);
+    }
+  }
+
+  function render(){
+    // Determine wobble based on beer
+    const wob = (beer/100) * 2.8;
+    const wobble = Math.sin(performance.now()*0.004) * wob;
+
+    if(state === 'fight'){
+      drawFightScene();
+      // flash
+      if(fight.flash > 0){
+        g.fillStyle = 'rgba(255,255,255,' + (fight.flash*0.35) + ')';
+        g.fillRect(0,0,W0,H0);
+      }
+    }else{
+      const camX = getCamX();
+      drawStreet(camX, wobble);
+
+      // draw doors in view
+      for(const d of doors){
+        const sx = d.x - camX;
+        if(sx > -60 && sx < W0+60){
+          drawDoor({x:sx, type:d.type});
+          // sign label (tiny)
+          // show "ACTION" hint if near
+          const near = (Math.abs((d.x+8)-(player.x+PLAYER_W/2)) < 26) && (state==='play') && (d.cooldown<=0);
+          if(near){
+            pxRect(sx+3, 86, 22, 6, 'rgba(255,255,255,.25)');
+            pxRect(sx+6, 88, 16, 2, '#fff');
+          }
+        }
+      }
+
+      // draw bouncer
+      if(bouncer.active){
+        const sx = bouncer.x - camX;
+        drawBouncer(sx, bouncer.y, false);
+      }
+
+      // draw player
+      const px = player.x - camX;
+      // invuln flicker
+      const flicker = (player.invuln > 0) && ((Math.floor(performance.now()/60)%2)===0);
+      if(!flicker){
+        drawPlayer(px, player.y);
+      }
+
+      // subtle drunk overlay
+      if(beer > 0){
+        const a = clamp(beer/120, 0, 1) * 0.18;
+        g.fillStyle = 'rgba(255,0,255,'+a+')';
+        g.fillRect(0,0,W0,H0);
+      }
+
+      // warn flash
+      if(bouncer.active && bouncer.warn){
+        g.fillStyle = 'rgba(255,51,85,0.08)';
+        g.fillRect(0,0,W0,H0);
+      }
+    }
+
+    // blit to screen with nearest-neighbor scaling & letterbox
+    const screenW = window.innerWidth;
+    const screenH = window.innerHeight;
+    const scale = Math.max(1, Math.floor(Math.min(screenW / W0, screenH / H0)));
+    const dw = W0 * scale;
+    const dh = H0 * scale;
+    const ox = Math.floor((screenW - dw)/2);
+    const oy = Math.floor((screenH - dh)/2);
+    ctx.clearRect(0,0,screenW,screenH);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(off, 0,0,W0,H0, ox, oy, dw, dh);
+
+    // Update HUD text
+    uiTime.textContent = "TIME " + Math.ceil(tLeft);
+    uiBeer.textContent = "PROMILLE " + Math.floor(beer);
+    uiScore.textContent = "SCORE " + Math.floor(score);
+    uiBest.textContent = "BEST " + best;
+
+    // punch button hinting in fight
+    if(state === 'fight' && fight.phase === 2){
+      // pulse border
+      const pulse = (Math.sin(performance.now()*0.018)*0.5+0.5);
+      btnPunch.style.boxShadow = "0 0 " + (10 + pulse*14) + "px rgba(51,255,102,.55)";
+    }else{
+      btnPunch.style.boxShadow = "none";
+    }
+  }
+
+  function tick(){
+    const now = performance.now();
+    let dt = (now - lastTS) / 1000;
+    lastTS = now;
+    dt = Math.min(dt, 0.033); // clamp for stability
+    update(dt);
+    render();
+    requestAnimationFrame(tick);
+  }
+  tick();
+
+})();
+</script>
+</body>
+</html>
